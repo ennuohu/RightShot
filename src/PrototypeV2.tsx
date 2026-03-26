@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,6 +12,10 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+import {
+  persistProjectSnapshot,
+  type PersistProjectStatus,
+} from './lib/projectPersistence';
 
 type Step = 1 | 2 | 3;
 type ProfileKey = 'tool' | 'luxury' | 'skincare' | 'tech';
@@ -580,7 +585,11 @@ function buildSolution(form: FormState, strategy: StrategyCard, customPrompt: st
   };
 }
 
-export default function PrototypeV2() {
+type PrototypeV2Props = {
+  user: User;
+};
+
+export default function PrototypeV2({ user }: PrototypeV2Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>(1);
   const [isRecognizing, setIsRecognizing] = useState(false);
@@ -595,6 +604,11 @@ export default function PrototypeV2() {
   const [sceneEdits, setSceneEdits] = useState<Record<string, string>>({});
   const [sceneCommands, setSceneCommands] = useState<Record<string, string[]>>({});
   const [sceneVoiceInput, setSceneVoiceInput] = useState('');
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [versionId, setVersionId] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveMessage, setSaveMessage] = useState('尚未保存到项目');
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({
     productName: '',
     category: 'tool',
@@ -614,7 +628,85 @@ export default function PrototypeV2() {
     [activeTweaks, advancedPrompt, form, strategy],
   );
 
+  const resetProjectPersistence = () => {
+    setProjectId(null);
+    setVersionId(null);
+    setSaveState('idle');
+    setSaveMessage('尚未保存到项目');
+    setLastSavedAt(null);
+  };
+
+  const buildScenePayload = () =>
+    solution.scenes.map((scene) => ({
+      id: scene.id,
+      title: scene.title,
+      objective: scene.objective,
+      visual: sceneEdits[scene.id] ?? scene.visual,
+      payoff: scene.payoff,
+      frameTone: scene.frameTone,
+      commands: sceneCommands[scene.id] ?? [],
+    }));
+
+  const persistCurrentProject = async (status: PersistProjectStatus) => {
+    setSaveState('saving');
+    setSaveMessage('正在保存项目...');
+
+    try {
+      const persisted = await persistProjectSnapshot({
+        user,
+        projectId,
+        versionId,
+        projectName: form.productName || currentProfile.defaultName,
+        category: form.category,
+        recognitionSource,
+        previews,
+        goal: form.goal,
+        ageRange: form.ageRange,
+        sellingPoints: form.sellingPoints,
+        note: form.note,
+        status,
+        strategyMode,
+        activeTweaks,
+        advancedPrompt,
+        formSnapshot: {
+          productName: form.productName,
+          category: form.category,
+          goal: form.goal,
+          ageRange: form.ageRange,
+          sellingPoints: form.sellingPoints,
+          note: form.note,
+          recognitionSource,
+          previews,
+        },
+        strategySnapshot: strategyMode
+          ? {
+              mode: strategyMode,
+              title: strategy.title,
+              subtitle: strategy.subtitle,
+              mustShow: strategy.mustShow,
+              avoid: strategy.avoid,
+            }
+          : null,
+        scenes: buildScenePayload(),
+      });
+
+      const timestamp = new Date().toISOString();
+      setProjectId(persisted.projectId);
+      setVersionId(persisted.versionId);
+      setSaveState('saved');
+      setSaveMessage(status === 'submitted' ? '项目已提交保存' : '项目草稿已保存');
+      setLastSavedAt(timestamp);
+
+      return true;
+    } catch (error) {
+      setSaveState('error');
+      setSaveMessage(error instanceof Error ? error.message : '保存失败，请稍后再试。');
+      return false;
+    }
+  };
+
   const applyProfile = (profile: ProductProfile, source: string, nextPreviews: string[]) => {
+    resetProjectPersistence();
     setRecognitionSource(source);
     setPreviews(nextPreviews);
     setForm({
@@ -740,6 +832,21 @@ export default function PrototypeV2() {
     },
   } as const;
   const currentStage = stageMeta[step];
+  const saveToneClass =
+    saveState === 'error'
+      ? 'border-[#ef4444]/20 bg-[#ef4444]/10 text-[#fecaca]'
+      : saveState === 'saved'
+        ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-100'
+        : 'border-white/10 bg-white/[0.04] text-white/55';
+  const saveStatusLabel =
+    saveState === 'saving'
+      ? '正在保存...'
+      : saveState === 'saved' && lastSavedAt
+        ? `已保存 ${new Date(lastSavedAt).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })}`
+        : saveMessage;
   const panelClass =
     'rounded-[30px] border border-white/10 bg-[#080808]/92 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.48)] backdrop-blur-2xl';
   const softCardClass =
@@ -773,6 +880,24 @@ export default function PrototypeV2() {
       [editingScene.id]: `${current[editingScene.id] ?? editingScene.visual}\n\n当前微调指令：${command}`,
     }));
     setSceneVoiceInput('');
+  };
+
+  const handleContinueToStrategy = async () => {
+    const saved = await persistCurrentProject('draft');
+    if (saved) {
+      setStep(2);
+    }
+  };
+
+  const handleGenerateStoryboard = async () => {
+    const saved = await persistCurrentProject('storyboard_ready');
+    if (saved) {
+      setStep(3);
+    }
+  };
+
+  const handleSubmitProject = async () => {
+    await persistCurrentProject('submitted');
   };
 
   const stageOne = (
@@ -1286,8 +1411,8 @@ export default function PrototypeV2() {
               </div>
               <div className="inline-flex items-center gap-3">
                 <span className={softPillClass}>当前阶段：{currentStage.label}</span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/55 backdrop-blur">
-                  自动保存已开启
+                <span className={`rounded-full border px-4 py-2 text-sm backdrop-blur ${saveToneClass}`}>
+                  {saveStatusLabel}
                 </span>
               </div>
             </div>
@@ -1414,8 +1539,8 @@ export default function PrototypeV2() {
                 </button>
                 <button
                   type="button"
-                  disabled={!recognizedReady || isRecognizing}
-                  onClick={() => setStep(2)}
+                  disabled={!recognizedReady || isRecognizing || saveState === 'saving'}
+                  onClick={() => void handleContinueToStrategy()}
                   className={primaryButtonClass}
                 >
                   继续生成策略
@@ -1428,8 +1553,8 @@ export default function PrototypeV2() {
               <>
                 <button
                   type="button"
-                  onClick={() => setStep(3)}
-                  disabled={!strategyMode}
+                  onClick={() => void handleGenerateStoryboard()}
+                  disabled={!strategyMode || saveState === 'saving'}
                   className={primaryButtonClass}
                 >
                   生成这个方案
@@ -1449,6 +1574,8 @@ export default function PrototypeV2() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => void handleSubmitProject()}
+                  disabled={saveState === 'saving'}
                   className={primaryButtonClass}
                 >
                   提交

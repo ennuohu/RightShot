@@ -118,7 +118,7 @@ export default function RootApp() {
 
   return (
     <div className="relative">
-      {mode === 'v2' ? <PrototypeV2 /> : <LegacyApp />}
+      {mode === 'v2' ? <PrototypeV2 user={session.user} /> : <LegacyApp />}
 
       <div className="fixed right-4 top-4 z-[60] rounded-[24px] border border-white/10 bg-black/60 p-2 shadow-[0_18px_50px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
         <div className="flex flex-wrap items-center gap-2 rounded-[18px] bg-white/[0.04] p-1">
