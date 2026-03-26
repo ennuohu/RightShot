@@ -1,11 +1,15 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
+  FolderOpen,
+  History,
   ImagePlus,
   Layers3,
+  LoaderCircle,
+  RefreshCcw,
   SlidersHorizontal,
   Sparkles,
   Upload,
@@ -13,7 +17,12 @@ import {
   X,
 } from 'lucide-react';
 import {
+  loadProjectSnapshot,
+  listProjectsForUser,
+  listVersionsForProject,
   persistProjectSnapshot,
+  type ProjectSummary,
+  type ProjectVersionSummary,
   type PersistProjectStatus,
 } from './lib/projectPersistence';
 
@@ -169,6 +178,21 @@ function goalLabel(goal: number) {
   if (goal <= 20) return '卖货';
   if (goal >= 80) return '品牌';
   return '种草';
+}
+
+function projectStatusLabel(status: PersistProjectStatus | null) {
+  switch (status) {
+    case 'submitted':
+      return '已提交';
+    case 'storyboard_ready':
+      return '已生成分镜';
+    case 'strategy_selected':
+      return '已选策略';
+    case 'draft':
+      return '草稿';
+    default:
+      return '未开始';
+  }
 }
 
 function createDemoImage(label: string, start: string, end: string) {
@@ -609,6 +633,13 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState('尚未保存到项目');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [currentProjectStatus, setCurrentProjectStatus] = useState<PersistProjectStatus | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [versions, setVersions] = useState<ProjectVersionSummary[]>([]);
+  const [isProjectsLoading, setIsProjectsLoading] = useState(true);
+  const [isVersionsLoading, setIsVersionsLoading] = useState(false);
+  const [isRestoringProject, setIsRestoringProject] = useState(false);
+  const [projectsMessage, setProjectsMessage] = useState('');
   const [form, setForm] = useState<FormState>({
     productName: '',
     category: 'tool',
@@ -628,12 +659,53 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
     [activeTweaks, advancedPrompt, form, strategy],
   );
 
+  const refreshProjects = async (nextProjectId?: string | null) => {
+    setIsProjectsLoading(true);
+
+    try {
+      const nextProjects = await listProjectsForUser(user);
+      setProjects(nextProjects);
+      setProjectsMessage(nextProjects.length === 0 ? '还没有历史项目，从当前页开始创建即可。' : '');
+
+      const activeId = nextProjectId ?? projectId;
+      if (activeId) {
+        const nextVersions = await listVersionsForProject(user, activeId);
+        setVersions(nextVersions);
+      } else {
+        setVersions([]);
+      }
+    } catch (error) {
+      setProjectsMessage(error instanceof Error ? error.message : '读取项目失败，请稍后再试。');
+    } finally {
+      setIsProjectsLoading(false);
+    }
+  };
+
+  const refreshVersions = async (nextProjectId: string) => {
+    setIsVersionsLoading(true);
+
+    try {
+      const nextVersions = await listVersionsForProject(user, nextProjectId);
+      setVersions(nextVersions);
+    } catch (error) {
+      setProjectsMessage(error instanceof Error ? error.message : '读取版本失败，请稍后再试。');
+    } finally {
+      setIsVersionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshProjects();
+  }, [user.id]);
+
   const resetProjectPersistence = () => {
     setProjectId(null);
     setVersionId(null);
+    setCurrentProjectStatus(null);
     setSaveState('idle');
     setSaveMessage('尚未保存到项目');
     setLastSavedAt(null);
+    setVersions([]);
   };
 
   const buildScenePayload = () =>
@@ -693,9 +765,11 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
       const timestamp = new Date().toISOString();
       setProjectId(persisted.projectId);
       setVersionId(persisted.versionId);
+      setCurrentProjectStatus(status);
       setSaveState('saved');
       setSaveMessage(status === 'submitted' ? '项目已提交保存' : '项目草稿已保存');
       setLastSavedAt(timestamp);
+      void refreshProjects(persisted.projectId);
 
       return true;
     } catch (error) {
@@ -841,7 +915,9 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
   const saveStatusLabel =
     saveState === 'saving'
       ? '正在保存...'
-      : saveState === 'saved' && lastSavedAt
+      : saveState === 'saved' && saveMessage === '已恢复历史项目'
+        ? saveMessage
+        : saveState === 'saved' && lastSavedAt
         ? `已保存 ${new Date(lastSavedAt).toLocaleTimeString('zh-CN', {
             hour: '2-digit',
             minute: '2-digit',
@@ -904,6 +980,62 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
 
   const handleSubmitProject = async () => {
     await persistCurrentProject('submitted');
+  };
+
+  const handleRestoreProject = async (targetProjectId: string, targetVersionId?: string) => {
+    setIsRestoringProject(true);
+    setSaveState('saving');
+    setSaveMessage('正在恢复项目...');
+
+    try {
+      const snapshot = await loadProjectSnapshot(user, targetProjectId, targetVersionId);
+      const nextCategory = (
+        snapshot.formSnapshot.category in profiles ? snapshot.formSnapshot.category : 'tool'
+      ) as ProfileKey;
+      const nextStep: Step =
+        snapshot.status === 'storyboard_ready' || snapshot.status === 'submitted'
+          ? 3
+          : snapshot.strategyMode
+            ? 2
+            : 1;
+
+      setProjectId(snapshot.projectId);
+      setVersionId(snapshot.versionId);
+      setCurrentProjectStatus(snapshot.status);
+      setRecognitionSource(snapshot.recognitionSource);
+      setPreviews(snapshot.previews);
+      setForm({
+        productName: snapshot.formSnapshot.productName,
+        category: nextCategory,
+        goal: snapshot.formSnapshot.goal,
+        ageRange: snapshot.formSnapshot.ageRange,
+        sellingPoints: snapshot.formSnapshot.sellingPoints,
+        audience: '',
+        note: snapshot.formSnapshot.note,
+      });
+      setStrategyMode((snapshot.strategyMode as StrategyMode | null) ?? null);
+      setActiveTweaks(snapshot.activeTweaks);
+      setAdvancedPrompt(snapshot.advancedPrompt);
+      setSceneEdits(
+        Object.fromEntries(snapshot.scenes.map((scene) => [scene.id, scene.visual])),
+      );
+      setSceneCommands(
+        Object.fromEntries(snapshot.scenes.map((scene) => [scene.id, scene.commands])),
+      );
+      setSceneVoiceInput('');
+      setEditingSceneId(null);
+      setNameEdited(false);
+      setStep(nextStep);
+      setSaveState('saved');
+      setSaveMessage('已恢复历史项目');
+      setLastSavedAt(snapshot.updatedAt);
+      await refreshVersions(snapshot.projectId);
+    } catch (error) {
+      setSaveState('error');
+      setSaveMessage(error instanceof Error ? error.message : '恢复项目失败，请稍后再试。');
+    } finally {
+      setIsRestoringProject(false);
+    }
   };
 
   const stageOne = (
@@ -1392,6 +1524,149 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
     </div>
   );
 
+  const projectRail = (
+    <section className="mt-6 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className={panelClass}>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-white/36">Projects</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">继续上次做到一半的项目</h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshProjects()}
+            className={secondaryButtonClass}
+          >
+            {isProjectsLoading ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCcw size={15} />}
+            刷新
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+          {projects.map((project) => (
+            <button
+              key={project.id}
+              type="button"
+              onClick={() => void handleRestoreProject(project.id)}
+              disabled={isRestoringProject}
+              className={`overflow-hidden rounded-[24px] border p-4 text-left transition ${
+                project.id === projectId
+                  ? 'border-white/24 bg-white/[0.08]'
+                  : 'border-white/10 bg-white/[0.04] hover:border-white/18 hover:bg-white/[0.06]'
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              <div className="flex items-start gap-4">
+                {project.previewUrl ? (
+                  <img
+                    src={project.previewUrl}
+                    alt={project.name}
+                    className="h-20 w-24 rounded-[18px] object-cover"
+                  />
+                ) : (
+                  <div
+                    className="h-20 w-24 rounded-[18px]"
+                    style={{
+                      background: `linear-gradient(135deg, ${profiles[project.category as ProfileKey]?.colors?.[0] ?? '#6c5750'}, ${
+                        profiles[project.category as ProfileKey]?.colors?.[1] ?? '#171717'
+                      })`,
+                    }}
+                  />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="truncate text-base font-semibold text-white">{project.name}</p>
+                    <span className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[11px] text-white/56">
+                      {projectStatusLabel(project.status)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-white/56">
+                    上次更新 {new Date(project.updatedAt).toLocaleString('zh-CN', {
+                      month: '2-digit',
+                      day: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </p>
+                  <div className="mt-3 inline-flex items-center gap-2 text-sm text-white/72">
+                    <FolderOpen size={15} />
+                    恢复这个项目
+                  </div>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {projects.length === 0 && (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-white/[0.04] p-5 text-sm leading-7 text-white/58">
+            {isProjectsLoading ? '正在读取项目列表...' : projectsMessage || '还没有保存过的项目。'}
+          </div>
+        )}
+      </div>
+
+      <div className={panelClass}>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-white/36">Versions</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">当前项目的保存节点</h2>
+          </div>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/60">
+            {projectStatusLabel(currentProjectStatus)}
+          </span>
+        </div>
+
+        <div className="mt-5 space-y-3">
+          {isVersionsLoading && (
+            <div className="rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-4 text-sm text-white/60">
+              正在读取版本...
+            </div>
+          )}
+
+          {!isVersionsLoading &&
+            versions.map((version) => (
+              <button
+                key={version.id}
+                type="button"
+                onClick={() => {
+                  if (projectId) {
+                    void handleRestoreProject(projectId, version.id);
+                  }
+                }}
+                disabled={!projectId || isRestoringProject}
+                className={`flex w-full items-center justify-between rounded-[22px] border px-4 py-4 text-left transition ${
+                  version.id === versionId
+                    ? 'border-white/24 bg-white/[0.08]'
+                    : 'border-white/10 bg-white/[0.04] hover:border-white/18 hover:bg-white/[0.06]'
+                } disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                <div>
+                  <div className="inline-flex items-center gap-2 text-sm font-medium text-white">
+                    <History size={15} />
+                    V{version.versionIndex}
+                  </div>
+                  <p className="mt-2 text-sm text-white/56">{projectStatusLabel(version.status)}</p>
+                </div>
+                <p className="text-xs leading-5 text-white/46">
+                  {new Date(version.updatedAt).toLocaleString('zh-CN', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </p>
+              </button>
+            ))}
+        </div>
+
+        {!isVersionsLoading && versions.length === 0 && (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-white/[0.04] p-5 text-sm leading-7 text-white/58">
+            还没有可恢复的历史版本。先保存一次当前项目，版本列表就会出现在这里。
+          </div>
+        )}
+      </div>
+    </section>
+  );
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#020202] text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -1509,6 +1784,8 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
             </div>
           </div>
         </header>
+
+        {projectRail}
 
         <main className="mt-6">
           {step === 1 && stageOne}
