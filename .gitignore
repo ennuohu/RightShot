@@ -7,3 +7,5 @@ coverage/
 tmp-style-*.jpg
 .env*
 !.env.example
+
+.vercel
