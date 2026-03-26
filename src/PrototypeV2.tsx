@@ -736,10 +736,10 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
     setIsRecognizing(false);
   };
 
-  const handleFileUpload = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const handleFileUpload = async (files: File[]) => {
+    if (files.length === 0) return;
 
-    const pickedFiles = Array.from(files).slice(0, 4);
+    const pickedFiles = files.slice(0, 4);
     const filePreviews = await Promise.all(
       pickedFiles.map(
         (file) =>
@@ -809,7 +809,7 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
     setCustomPointInput('');
   };
 
-  const recognizedReady = Boolean(form.productName);
+  const recognizedReady = Boolean(form.productName.trim()) || previews.length > 0;
   const availablePoints = Array.from(new Set([...currentProfile.points, ...form.sellingPoints]));
   const ageMinPercent = (form.ageRange[0] / 80) * 100;
   const ageMaxPercent = (form.ageRange[1] / 80) * 100;
@@ -883,6 +883,12 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
   };
 
   const handleContinueToStrategy = async () => {
+    if (!recognizedReady) {
+      setSaveState('error');
+      setSaveMessage('先上传一张产品图，或者先填一个产品名称。');
+      return;
+    }
+
     const saved = await persistCurrentProject('draft');
     if (saved) {
       setStep(2);
@@ -974,7 +980,8 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
           multiple
           className="hidden"
           onChange={(event) => {
-            void handleFileUpload(event.target.files);
+            const pickedFiles = Array.from(event.target.files ?? []) as File[];
+            void handleFileUpload(pickedFiles);
             event.target.value = '';
           }}
         />
