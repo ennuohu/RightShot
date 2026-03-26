@@ -1517,7 +1517,7 @@ export default function PrototypeV2({ user }: PrototypeV2Props) {
         </main>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 border-t border-white/10 bg-black/65 backdrop-blur-2xl">
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-black/65 backdrop-blur-2xl">
         <div className="mx-auto flex max-w-[1480px] flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
           <div className="text-sm leading-6 text-white/58">
             {step === 1 && '上传完产品图，下一步我会先把理解整理成几种不同的拍法给你挑。'}
