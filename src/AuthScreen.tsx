@@ -1,11 +1,15 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowRight, Mail, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Mail, ShieldCheck, Sparkles } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 const glassPanelClass =
   'relative overflow-hidden rounded-[32px] border border-white/10 bg-white/[0.04] p-6 shadow-[0_30px_80px_rgba(0,0,0,0.38)] backdrop-blur-2xl';
 
-export default function AuthScreen() {
+type AuthScreenProps = {
+  onBack?: () => void;
+};
+
+export default function AuthScreen({ onBack }: AuthScreenProps) {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -77,9 +81,21 @@ export default function AuthScreen() {
           <section className="relative overflow-hidden rounded-[40px] border border-white/10 bg-[#030303]/94 px-6 py-8 shadow-[0_42px_130px_rgba(0,0,0,0.62)] backdrop-blur-2xl sm:px-8 sm:py-10">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_8%_14%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_88%_16%,rgba(147,197,253,0.10),transparent_18%),linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0))]" />
             <div className="relative">
-              <div className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/70 backdrop-blur">
-                <span className="text-[11px] uppercase tracking-[0.38em] text-white/40">Brand</span>
-                <span className="font-medium text-white">拍对 RightShot</span>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/70 backdrop-blur">
+                  <span className="text-[11px] uppercase tracking-[0.38em] text-white/40">Brand</span>
+                  <span className="font-medium text-white">拍对 RightShot</span>
+                </div>
+                {onBack && (
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/70 transition hover:border-white/20 hover:bg-white/[0.08]"
+                  >
+                    <ArrowLeft size={14} />
+                    返回介绍页
+                  </button>
+                )}
               </div>
 
               <div className="mt-12 max-w-4xl">

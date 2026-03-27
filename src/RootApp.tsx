@@ -3,10 +3,14 @@ import type { Session } from '@supabase/supabase-js';
 import { Layers3, LoaderCircle, LogOut, Sparkles } from 'lucide-react';
 import LegacyApp from './App';
 import AuthScreen from './AuthScreen';
+import LandingScreen from './LandingScreen';
 import PrototypeV2 from './PrototypeV2';
+import TrialApplicationScreen, { type TrialProfile } from './TrialApplicationScreen';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
+import { getTrialProfile, submitTrialApplication } from './lib/trialAccess';
 
 type ViewMode = 'v2' | 'legacy';
+type PublicView = 'landing' | 'auth';
 
 const STORAGE_KEY = 'ai_ad_ui_mode';
 
@@ -15,7 +19,7 @@ function LoadingScreen() {
     <div className="flex min-h-screen items-center justify-center bg-[#020202] px-6 text-white">
       <div className="rounded-[28px] border border-white/10 bg-white/[0.04] px-8 py-6 text-center shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl">
         <LoaderCircle size={24} className="mx-auto animate-spin text-white/70" />
-        <p className="mt-4 text-sm text-white/60">正在确认登录状态...</p>
+        <p className="mt-4 text-sm text-white/60">正在确认访问状态...</p>
       </div>
     </div>
   );
@@ -30,7 +34,7 @@ function MissingConfigScreen() {
           Supabase 环境变量还没配置完成
         </h1>
         <p className="mt-4 text-sm leading-7 text-white/60">
-          请先配置 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，然后刷新页面。当前站点已经接入登录逻辑，但缺少必要的前端连接参数。
+          请先配置 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，然后刷新页面。当前站点已经接入登录与试用门禁，但缺少必要的前端连接参数。
         </p>
       </div>
     </div>
@@ -39,8 +43,11 @@ function MissingConfigScreen() {
 
 export default function RootApp() {
   const [mode, setMode] = useState<ViewMode>('v2');
+  const [publicView, setPublicView] = useState<PublicView>('landing');
   const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   const [session, setSession] = useState<Session | null>(null);
+  const [trialProfile, setTrialProfile] = useState<TrialProfile | null>(null);
+  const [trialReady, setTrialReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
 
   useEffect(() => {
@@ -68,7 +75,7 @@ export default function RootApp() {
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!active) return;
       setSession(nextSession);
-      setAuthReady(true);
+      setTrialReady(false);
       setIsSigningOut(false);
     });
 
@@ -77,6 +84,44 @@ export default function RootApp() {
       subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setTrialProfile(null);
+      setTrialReady(true);
+      return;
+    }
+
+    let active = true;
+    setTrialReady(false);
+
+    void getTrialProfile(session.user)
+      .then((profile) => {
+        if (!active) return;
+        setTrialProfile(profile);
+      })
+      .catch(() => {
+        if (!active) return;
+        setTrialProfile({
+          fullName:
+            session.user.user_metadata?.full_name ??
+            session.user.email?.split('@')[0] ??
+            '',
+          companyName: '',
+          roleTitle: '',
+          useCase: '',
+          trialStatus: 'not_applied',
+        });
+      })
+      .finally(() => {
+        if (!active) return;
+        setTrialReady(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [session]);
 
   const handleModeChange = (nextMode: ViewMode) => {
     setMode(nextMode);
@@ -95,7 +140,21 @@ export default function RootApp() {
     }
 
     setSession(null);
+    setTrialProfile(null);
+    setTrialReady(true);
+    setPublicView('landing');
     setIsSigningOut(false);
+  };
+
+  const handleTrialSubmit = async (payload: {
+    fullName: string;
+    companyName: string;
+    roleTitle: string;
+    useCase: string;
+  }) => {
+    if (!session) return;
+    const nextProfile = await submitTrialApplication(session.user, payload);
+    setTrialProfile(nextProfile);
   };
 
   if (!isSupabaseConfigured) {
@@ -107,13 +166,38 @@ export default function RootApp() {
   }
 
   if (!session) {
-    return <AuthScreen />;
+    if (publicView === 'landing') {
+      return (
+        <LandingScreen
+          onApplyTrial={() => setPublicView('auth')}
+          onLogin={() => setPublicView('auth')}
+        />
+      );
+    }
+
+    return <AuthScreen onBack={() => setPublicView('landing')} />;
+  }
+
+  if (!trialReady) {
+    return <LoadingScreen />;
+  }
+
+  if (!trialProfile || trialProfile.trialStatus !== 'applied') {
+    return (
+      <TrialApplicationScreen
+        user={session.user}
+        initialProfile={trialProfile}
+        onSubmit={handleTrialSubmit}
+        onSignOut={() => void handleSignOut()}
+      />
+    );
   }
 
   const userLabel =
-    session.user.user_metadata?.full_name ??
-    session.user.email ??
-    session.user.phone ??
+    trialProfile.fullName ||
+    session.user.user_metadata?.full_name ||
+    session.user.email ||
+    session.user.phone ||
     '已登录';
 
   return (

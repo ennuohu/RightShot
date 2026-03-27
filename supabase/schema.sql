@@ -15,9 +15,20 @@ create table if not exists public.profiles (
   email text,
   full_name text,
   avatar_url text,
+  company_name text,
+  role_title text,
+  use_case text,
+  trial_status text not null default 'not_applied',
+  trial_submitted_at timestamptz,
   created_at timestamptz not null default timezone('utc'::text, now()),
   updated_at timestamptz not null default timezone('utc'::text, now())
 );
+
+alter table public.profiles add column if not exists company_name text;
+alter table public.profiles add column if not exists role_title text;
+alter table public.profiles add column if not exists use_case text;
+alter table public.profiles add column if not exists trial_status text not null default 'not_applied';
+alter table public.profiles add column if not exists trial_submitted_at timestamptz;
 
 create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
