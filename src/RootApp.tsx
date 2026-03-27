@@ -1,16 +1,26 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Layers3, LoaderCircle, LogOut, Sparkles } from 'lucide-react';
+import AdminApplicationsScreen from './AdminApplicationsScreen';
 import LegacyApp from './App';
 import AuthScreen from './AuthScreen';
 import LandingScreen from './LandingScreen';
 import PrototypeV2 from './PrototypeV2';
-import TrialApplicationScreen, { type TrialProfile } from './TrialApplicationScreen';
+import TrialApplicationScreen from './TrialApplicationScreen';
+import TrialPendingScreen from './TrialPendingScreen';
+import { isAdminEmail, isTesterEmail } from './lib/accessControl';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
-import { getTrialProfile, submitTrialApplication } from './lib/trialAccess';
+import {
+  getTrialProfile,
+  listTrialApplications,
+  submitTrialApplication,
+  updateTrialApplicationStatus,
+} from './lib/trialAccess';
+import type { TrialApplicationRecord, TrialProfile, TrialStatus } from './lib/trialTypes';
 
 type ViewMode = 'v2' | 'legacy';
 type PublicView = 'landing' | 'auth';
+type WorkspaceView = 'tool' | 'admin';
 
 const STORAGE_KEY = 'ai_ad_ui_mode';
 
@@ -49,6 +59,11 @@ export default function RootApp() {
   const [trialProfile, setTrialProfile] = useState<TrialProfile | null>(null);
   const [trialReady, setTrialReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('tool');
+  const [applications, setApplications] = useState<TrialApplicationRecord[]>([]);
+  const [applicationsReady, setApplicationsReady] = useState(false);
+  const [applicationsMessage, setApplicationsMessage] = useState('');
+  const [isUpdatingApplication, setIsUpdatingApplication] = useState(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY) as ViewMode | null;
@@ -89,6 +104,8 @@ export default function RootApp() {
     if (!session) {
       setTrialProfile(null);
       setTrialReady(true);
+      setApplications([]);
+      setApplicationsReady(false);
       return;
     }
 
@@ -110,7 +127,8 @@ export default function RootApp() {
           companyName: '',
           roleTitle: '',
           useCase: '',
-          trialStatus: 'not_applied',
+          trialStatus: isTesterEmail(session.user.email) ? 'tester' : 'not_applied',
+          accessRole: isAdminEmail(session.user.email) ? 'admin' : 'user',
         });
       })
       .finally(() => {
@@ -122,6 +140,36 @@ export default function RootApp() {
       active = false;
     };
   }, [session]);
+
+  useEffect(() => {
+    if (!session || !isAdminEmail(session.user.email)) {
+      setApplications([]);
+      setApplicationsReady(true);
+      return;
+    }
+
+    let active = true;
+    setApplicationsReady(false);
+
+    void listTrialApplications(session.user)
+      .then((nextApplications) => {
+        if (!active) return;
+        setApplications(nextApplications);
+        setApplicationsMessage('');
+      })
+      .catch((error) => {
+        if (!active) return;
+        setApplicationsMessage(error instanceof Error ? error.message : '读取申请列表失败。');
+      })
+      .finally(() => {
+        if (!active) return;
+        setApplicationsReady(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [session, trialProfile?.trialStatus]);
 
   const handleModeChange = (nextMode: ViewMode) => {
     setMode(nextMode);
@@ -142,6 +190,7 @@ export default function RootApp() {
     setSession(null);
     setTrialProfile(null);
     setTrialReady(true);
+    setWorkspaceView('tool');
     setPublicView('landing');
     setIsSigningOut(false);
   };
@@ -155,6 +204,40 @@ export default function RootApp() {
     if (!session) return;
     const nextProfile = await submitTrialApplication(session.user, payload);
     setTrialProfile(nextProfile);
+  };
+
+  const refreshApplications = async () => {
+    if (!session) return;
+
+    setApplicationsReady(false);
+
+    try {
+      const nextApplications = await listTrialApplications(session.user);
+      setApplications(nextApplications);
+      setApplicationsMessage('');
+    } catch (error) {
+      setApplicationsMessage(error instanceof Error ? error.message : '读取申请列表失败。');
+    } finally {
+      setApplicationsReady(true);
+    }
+  };
+
+  const handleUpdateApplicationStatus = async (targetId: string, status: TrialStatus) => {
+    setIsUpdatingApplication(true);
+
+    try {
+      await updateTrialApplicationStatus(targetId, status);
+      await refreshApplications();
+
+      if (session && targetId === session.user.id) {
+        const nextProfile = await getTrialProfile(session.user);
+        setTrialProfile(nextProfile);
+      }
+    } catch (error) {
+      setApplicationsMessage(error instanceof Error ? error.message : '更新申请状态失败。');
+    } finally {
+      setIsUpdatingApplication(false);
+    }
   };
 
   if (!isSupabaseConfigured) {
@@ -182,7 +265,13 @@ export default function RootApp() {
     return <LoadingScreen />;
   }
 
-  if (!trialProfile || trialProfile.trialStatus !== 'applied') {
+  const isPrivileged = isTesterEmail(session.user.email) || isAdminEmail(session.user.email);
+  const canUseTool =
+    isPrivileged ||
+    trialProfile?.trialStatus === 'approved' ||
+    trialProfile?.trialStatus === 'tester';
+
+  if ((!trialProfile || trialProfile.trialStatus === 'not_applied') && !isPrivileged) {
     return (
       <TrialApplicationScreen
         user={session.user}
@@ -193,8 +282,18 @@ export default function RootApp() {
     );
   }
 
+  if (!canUseTool) {
+    return (
+      <TrialPendingScreen
+        user={session.user}
+        profile={trialProfile}
+        onSignOut={() => void handleSignOut()}
+      />
+    );
+  }
+
   const userLabel =
-    trialProfile.fullName ||
+    trialProfile?.fullName ||
     session.user.user_metadata?.full_name ||
     session.user.email ||
     session.user.phone ||
@@ -202,7 +301,20 @@ export default function RootApp() {
 
   return (
     <div className="relative">
-      {mode === 'v2' ? <PrototypeV2 user={session.user} /> : <LegacyApp />}
+      {workspaceView === 'admin' ? (
+        <AdminApplicationsScreen
+          applications={applications}
+          isLoading={!applicationsReady}
+          isUpdating={isUpdatingApplication}
+          message={applicationsMessage}
+          onRefresh={() => void refreshApplications()}
+          onUpdateStatus={(id, status) => void handleUpdateApplicationStatus(id, status)}
+        />
+      ) : mode === 'v2' ? (
+        <PrototypeV2 user={session.user} />
+      ) : (
+        <LegacyApp />
+      )}
 
       <div className="fixed right-4 top-4 z-[60] rounded-[24px] border border-white/10 bg-black/60 p-2 shadow-[0_18px_50px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
         <div className="flex flex-wrap items-center gap-2 rounded-[18px] bg-white/[0.04] p-1">
@@ -212,9 +324,12 @@ export default function RootApp() {
 
           <button
             type="button"
-            onClick={() => handleModeChange('v2')}
+            onClick={() => {
+              setWorkspaceView('tool');
+              handleModeChange('v2');
+            }}
             className={`inline-flex items-center gap-2 rounded-[14px] px-4 py-2 text-sm transition ${
-              mode === 'v2'
+              workspaceView !== 'admin' && mode === 'v2'
                 ? 'bg-white text-[#050505] shadow-md'
                 : 'text-white/64 hover:bg-white/[0.08]'
             }`}
@@ -223,18 +338,38 @@ export default function RootApp() {
             拍对
           </button>
 
-          <button
-            type="button"
-            onClick={() => handleModeChange('legacy')}
-            className={`inline-flex items-center gap-2 rounded-[14px] px-4 py-2 text-sm transition ${
-              mode === 'legacy'
-                ? 'bg-white text-[#050505] shadow-md'
-                : 'text-white/64 hover:bg-white/[0.08]'
-            }`}
-          >
-            <Layers3 size={14} />
-            旧版
-          </button>
+          {workspaceView !== 'admin' && (
+            <button
+              type="button"
+              onClick={() => {
+                setWorkspaceView('tool');
+                handleModeChange('legacy');
+              }}
+              className={`inline-flex items-center gap-2 rounded-[14px] px-4 py-2 text-sm transition ${
+                mode === 'legacy'
+                  ? 'bg-white text-[#050505] shadow-md'
+                  : 'text-white/64 hover:bg-white/[0.08]'
+              }`}
+            >
+              <Layers3 size={14} />
+              旧版
+            </button>
+          )}
+
+          {isAdminEmail(session.user.email) && (
+            <button
+              type="button"
+              onClick={() => setWorkspaceView((current) => (current === 'tool' ? 'admin' : 'tool'))}
+              className={`inline-flex items-center gap-2 rounded-[14px] px-4 py-2 text-sm transition ${
+                workspaceView === 'admin'
+                  ? 'bg-white text-[#050505] shadow-md'
+                  : 'text-white/64 hover:bg-white/[0.08]'
+              }`}
+            >
+              <Sparkles size={14} />
+              后台
+            </button>
+          )}
 
           <button
             type="button"

@@ -1,14 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { ArrowRight, LoaderCircle, ShieldCheck } from 'lucide-react';
-
-export type TrialProfile = {
-  fullName: string;
-  companyName: string;
-  roleTitle: string;
-  useCase: string;
-  trialStatus: 'not_applied' | 'applied';
-};
+import type { TrialProfile } from './lib/trialTypes';
 
 type TrialApplicationScreenProps = {
   user: User;
@@ -96,14 +89,14 @@ export default function TrialApplicationScreen({
                   就可以开始使用。
                 </h1>
                 <p className="mt-6 max-w-xl text-base leading-8 text-white/60">
-                  这一步主要用来确认你的团队和使用场景。提交后会立即开通试用，不需要再单独等待审核。
+                  这一步主要用来确认你的团队和使用场景。提交后会进入试用审核列表，审核通过后即可进入工具页。
                 </p>
 
                 <div className="mt-8 space-y-3">
                   <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
                     <p className="text-sm font-medium text-white">你会获得什么</p>
                     <p className="mt-3 text-sm leading-7 text-white/58">
-                      进入工具页、保存项目、恢复历史版本，并继续后续的图片上传、策略选择和分镜编辑流程。
+                      审核通过后进入工具页、保存项目、恢复历史版本，并继续后续的图片上传、策略选择和分镜编辑流程。
                     </p>
                   </div>
                   <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">

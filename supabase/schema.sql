@@ -20,6 +20,8 @@ create table if not exists public.profiles (
   use_case text,
   trial_status text not null default 'not_applied',
   trial_submitted_at timestamptz,
+  approved_at timestamptz,
+  access_role text not null default 'user',
   created_at timestamptz not null default timezone('utc'::text, now()),
   updated_at timestamptz not null default timezone('utc'::text, now())
 );
@@ -29,6 +31,8 @@ alter table public.profiles add column if not exists role_title text;
 alter table public.profiles add column if not exists use_case text;
 alter table public.profiles add column if not exists trial_status text not null default 'not_applied';
 alter table public.profiles add column if not exists trial_submitted_at timestamptz;
+alter table public.profiles add column if not exists approved_at timestamptz;
+alter table public.profiles add column if not exists access_role text not null default 'user';
 
 create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
@@ -113,6 +117,13 @@ for select
 to authenticated
 using ((select auth.uid()) = id);
 
+drop policy if exists "profiles_select_admin" on public.profiles;
+create policy "profiles_select_admin"
+on public.profiles
+for select
+to authenticated
+using (lower(coalesce((select auth.jwt()->>'email'), '')) = 'nuoai01@gmail.com');
+
 drop policy if exists "profiles_insert_own" on public.profiles;
 create policy "profiles_insert_own"
 on public.profiles
@@ -127,6 +138,14 @@ for update
 to authenticated
 using ((select auth.uid()) = id)
 with check ((select auth.uid()) = id);
+
+drop policy if exists "profiles_update_admin" on public.profiles;
+create policy "profiles_update_admin"
+on public.profiles
+for update
+to authenticated
+using (lower(coalesce((select auth.jwt()->>'email'), '')) = 'nuoai01@gmail.com')
+with check (lower(coalesce((select auth.jwt()->>'email'), '')) = 'nuoai01@gmail.com');
 
 drop policy if exists "projects_select_own" on public.projects;
 create policy "projects_select_own"
